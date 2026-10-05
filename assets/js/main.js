@@ -1,0 +1,794 @@
+/* Schweisstechnik Blitz – Interaktion & Animation (GSAP + ScrollTrigger + Lenis, mit Fallback ohne) */
+(function () {
+  'use strict';
+
+  var d = document, root = d.documentElement;
+  var $ = function (s, c) { return (c || d).querySelector(s); };
+  var $$ = function (s, c) { return Array.prototype.slice.call((c || d).querySelectorAll(s)); };
+  var clamp = function (v, a, b) { return Math.max(a, Math.min(b, v)); };
+  var lerp = function (a, b, t) { return a + (b - a) * t; };
+
+  var reduced = matchMedia('(prefers-reduced-motion: reduce)').matches;
+  var fine = matchMedia('(hover: hover) and (pointer: fine)').matches;
+  var G = window.gsap, ST = window.ScrollTrigger;
+  var hasG = !!(G && ST);
+  if (hasG) G.registerPlugin(ST);
+  var animate = hasG && !reduced;
+  if (!animate) root.classList.add('no-scrub');
+
+  /* Element sichtbar (oder bereits vorbei) → einmal ausführen */
+  function onView(el, fn, margin) {
+    if (!('IntersectionObserver' in window)) { fn(); return; }
+    var io = new IntersectionObserver(function (entries) {
+      entries.forEach(function (en) {
+        if (en.isIntersecting || en.boundingClientRect.top < 0) { io.disconnect(); fn(); }
+      });
+    }, { rootMargin: margin || '0px 0px -12% 0px' });
+    io.observe(el);
+  }
+
+  /* ---------- Text zerlegen ---------- */
+  function splitChars(el, labelEl) {
+    var label = el.textContent.replace(/\s+/g, ' ').trim();
+    var chars = [];
+    (function walk(node) {
+      Array.prototype.slice.call(node.childNodes).forEach(function (n) {
+        if (n.nodeType === 3) {
+          var frag = d.createDocumentFragment();
+          n.textContent.split(/(\s+)/).forEach(function (part) {
+            if (!part) return;
+            if (/^\s+$/.test(part)) { frag.appendChild(d.createTextNode(' ')); return; }
+            var w = d.createElement('span'); w.className = 'w';
+            Array.from(part).forEach(function (ch) {
+              var c = d.createElement('span'); c.className = 'c'; c.textContent = ch;
+              w.appendChild(c); chars.push(c);
+            });
+            frag.appendChild(w);
+          });
+          n.parentNode.replaceChild(frag, n);
+        } else if (n.nodeType === 1) walk(n);
+      });
+    })(el);
+    var target = labelEl || el;
+    target.setAttribute('aria-label', label);
+    Array.prototype.slice.call(el.children).forEach(function (ch) { ch.setAttribute('aria-hidden', 'true'); });
+    return chars;
+  }
+  function splitWords(el) {
+    var words = el.textContent.trim().split(/\s+/);
+    el.textContent = '';
+    return words.map(function (w, i) {
+      var s = d.createElement('span'); s.className = 'sw'; s.textContent = w;
+      el.appendChild(s); if (i < words.length - 1) el.appendChild(d.createTextNode(' '));
+      return s;
+    });
+  }
+
+  /* ---------- Lenis ---------- */
+  var lenis = null;
+  if (animate && window.Lenis) {
+    lenis = new window.Lenis({ lerp: 0.085, smoothWheel: true, wheelMultiplier: 1 });
+    lenis.on('scroll', ST.update);
+    G.ticker.add(function (t) { lenis.raf(t * 1000); });
+    G.ticker.lagSmoothing(0);
+  }
+  function scrollToEl(t, id) {
+    if (lenis) lenis.scrollTo(t, { offset: id === '#top' ? 0 : -72, duration: 1.5 });
+    else t.scrollIntoView({ behavior: reduced ? 'auto' : 'smooth' });
+  }
+
+  /* ---------- Navigation & Menü ---------- */
+  var nav = $('[data-nav]'), burger = $('.nav__burger'), menu = $('#menu');
+  var menuOpen = false;
+  function openMenu() {
+    menuOpen = true; menu.hidden = false;
+    requestAnimationFrame(function () { requestAnimationFrame(function () { menu.classList.add('is-open'); }); });
+    burger.setAttribute('aria-expanded', 'true'); burger.setAttribute('aria-label', 'Menü schließen');
+    root.classList.add('menu-open'); nav.classList.remove('is-hidden');
+    if (lenis) lenis.stop();
+  }
+  function closeMenu() {
+    if (!menuOpen) return;
+    menuOpen = false; menu.classList.remove('is-open');
+    burger.setAttribute('aria-expanded', 'false'); burger.setAttribute('aria-label', 'Menü öffnen');
+    root.classList.remove('menu-open');
+    if (lenis) lenis.start();
+    setTimeout(function () { if (!menuOpen) menu.hidden = true; }, 800);
+  }
+  if (burger) burger.addEventListener('click', function () { menuOpen ? closeMenu() : openMenu(); });
+  d.addEventListener('keydown', function (e) { if (e.key === 'Escape' && menuOpen) { closeMenu(); burger.focus(); } });
+
+  d.addEventListener('click', function (e) {
+    var a = e.target.closest('a[href^="#"]');
+    if (!a) return;
+    var id = a.getAttribute('href');
+    if (id.length < 2) return;
+    var t = $(id);
+    if (!t) return;
+    e.preventDefault();
+    var wasOpen = menuOpen;
+    closeMenu();
+    setTimeout(function () {
+      scrollToEl(t, id);
+      if (!t.hasAttribute('tabindex')) t.setAttribute('tabindex', '-1');
+      t.focus({ preventScroll: true });
+    }, wasOpen ? 380 : 0);
+    if (history.replaceState) history.replaceState(null, '', id === '#top' ? location.pathname : id);
+  });
+
+  /* Aktiver Abschnitt in der Navigation */
+  var navLinks = $$('.nav__links a');
+  if ('IntersectionObserver' in window) {
+    var secIO = new IntersectionObserver(function (entries) {
+      entries.forEach(function (en) {
+        if (!en.isIntersecting) return;
+        navLinks.forEach(function (l) { l.classList.toggle('is-active', l.getAttribute('href') === '#' + en.target.id); });
+      });
+    }, { rootMargin: '-45% 0px -50% 0px' });
+    navLinks.forEach(function (l) { var s = $(l.getAttribute('href')); if (s) secIO.observe(s); });
+  }
+
+  /* Scroll-Zustand: Navigation, Fortschrittsnaht, Dock */
+  var seamP = $('.seam-progress'), dock = $('.dock');
+  var lastY = window.scrollY, ticking = false;
+  function onScroll() {
+    var y = window.scrollY;
+    nav.classList.toggle('is-solid', y > 30);
+    if (!menuOpen) nav.classList.toggle('is-hidden', y > lastY + 2 && y > 500);
+    if (y < lastY - 2) nav.classList.remove('is-hidden');
+    lastY = y;
+    var max = root.scrollHeight - innerHeight;
+    if (seamP) seamP.style.setProperty('--p', (max > 0 ? y / max : 0).toFixed(4));
+    if (dock) dock.classList.toggle('is-visible', y > innerHeight * 0.55);
+    ticking = false;
+  }
+  addEventListener('scroll', function () { if (!ticking) { ticking = true; requestAnimationFrame(onScroll); } }, { passive: true });
+  onScroll();
+
+  /* ---------- Cursor ---------- */
+  if (fine && !reduced) {
+    var cur = $('.cursor'), ring = $('.cursor__ring'), dot = $('.cursor__dot');
+    var mx = innerWidth / 2, my = innerHeight / 2, rx = mx, ry = my;
+    addEventListener('pointermove', function (e) { mx = e.clientX; my = e.clientY; root.classList.add('has-cursor'); }, { passive: true });
+    root.addEventListener('mouseleave', function () { root.classList.remove('has-cursor'); });
+    d.addEventListener('pointerover', function (e) {
+      cur.classList.toggle('is-link', !!e.target.closest('a, button, label, select, [data-tilt], .town, .towns li'));
+    });
+    addEventListener('pointerdown', function () { cur.classList.add('is-down'); });
+    addEventListener('pointerup', function () { cur.classList.remove('is-down'); });
+    (function loop() {
+      rx = lerp(rx, mx, 0.2); ry = lerp(ry, my, 0.2);
+      ring.style.transform = 'translate3d(' + rx + 'px,' + ry + 'px,0)';
+      dot.style.transform = 'translate3d(' + mx + 'px,' + my + 'px,0)';
+      requestAnimationFrame(loop);
+    })();
+  }
+
+  /* ---------- Magnetische Buttons ---------- */
+  if (fine && animate) {
+    $$('[data-magnetic]').forEach(function (el) {
+      var xTo = G.quickTo(el, 'x', { duration: 0.6, ease: 'power3' });
+      var yTo = G.quickTo(el, 'y', { duration: 0.6, ease: 'power3' });
+      el.addEventListener('pointermove', function (e) {
+        var r = el.getBoundingClientRect();
+        xTo((e.clientX - r.left - r.width / 2) * 0.22);
+        yTo((e.clientY - r.top - r.height / 2) * 0.32);
+      });
+      el.addEventListener('pointerleave', function () { xTo(0); yTo(0); });
+    });
+  }
+
+  /* ---------- Scramble ---------- */
+  function scramble(el, dur) {
+    var final = el.textContent, pool = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789#%&+/';
+    var start = performance.now();
+    (function tick(now) {
+      var p = Math.min((now - start) / (dur * 1000), 1), n = Math.floor(p * final.length), out = final.slice(0, n);
+      for (var i = n; i < final.length; i++) out += final[i] === ' ' || final[i] === ',' ? final[i] : pool[(Math.random() * pool.length) | 0];
+      el.textContent = out;
+      if (p < 1) requestAnimationFrame(tick); else el.textContent = final;
+    })(start);
+  }
+
+  /* ==========================================================================
+     HERO-INTRO
+     ========================================================================== */
+  var hero = $('.hero');
+  var h1 = $('.hero__title'), l1 = $('.hero__l1'), l2 = $('.hero__l2');
+  var heroChars = [];
+  var spark = null;
+  if (animate) {
+    var fullTitle = h1.textContent.replace(/\s+/g, ' ').trim();
+    heroChars = splitChars(l1, h1);
+    h1.setAttribute('aria-label', fullTitle);
+    l1.setAttribute('aria-hidden', 'true'); l2.setAttribute('aria-hidden', 'true');
+    spark = d.createElement('i'); spark.className = 'weld-spark'; h1.appendChild(spark);
+    G.set(heroChars, { yPercent: 115, rotateX: -85, opacity: 0 });
+    G.set(l2, { clipPath: 'inset(-10% 100% -20% 0)' });
+    G.set('[data-hero-fade]', { y: 34, opacity: 0 });
+    G.set(['.eyebrow', '.hero__hud', '.hero__scroll'], { opacity: 0 });
+    G.set(nav, { yPercent: -120 });
+  }
+
+  function heroIn() {
+    if (!animate) return;
+    var tl = G.timeline({ defaults: { ease: 'expo.out' } });
+    tl.to(nav, { yPercent: 0, duration: 1.2, clearProps: 'transform' }, 0.1)
+      .to('.eyebrow', { opacity: 1, duration: 0.6, onStart: function () { scramble($('.eyebrow span'), 1.1); } }, 0)
+      .to(heroChars, { yPercent: 0, rotateX: 0, opacity: 1, duration: 1.25, stagger: 0.032 }, 0.1);
+    // „die halten.“ wird wie eine Naht von links nach rechts gezogen
+    var proxy = { p: 0 };
+    tl.to(proxy, {
+      p: 1, duration: 1.5, ease: 'power2.inOut',
+      onStart: function () { spark.style.opacity = 1; },
+      onUpdate: function () {
+        var pr = proxy.p * 100;
+        l2.style.clipPath = 'inset(-10% ' + (100 - pr).toFixed(2) + '% -20% 0)';
+        spark.style.left = (l2.offsetLeft + l2.offsetWidth * proxy.p) + 'px';
+        spark.style.top = (l2.offsetTop + l2.offsetHeight * 0.55) + 'px';
+        spark.style.transform = 'scale(' + (0.75 + Math.random() * 0.5) + ')';
+      },
+      onComplete: function () { G.to(spark, { opacity: 0, duration: 0.5 }); l2.style.clipPath = 'none'; }
+    }, 0.55)
+      .to('[data-hero-fade]', { y: 0, opacity: 1, duration: 1.3, stagger: 0.12 }, 0.7)
+      .to(['.hero__hud', '.hero__scroll'], { opacity: 1, duration: 1 }, 1.4);
+    var cnt = $('[data-count]');
+    if (cnt) { var o = { v: 0 }; tl.to(o, { v: 20, duration: 1.6, ease: 'power2.out', onUpdate: function () { cnt.textContent = Math.round(o.v); } }, 0.9); }
+  }
+
+  /* ---------- Vorspann ---------- */
+  var loader = $('.loader'), flash = $('.flash');
+  (function runLoader() {
+    if (!loader) { heroIn(); return; }
+    if (!animate) { loader.remove(); return; }
+    var seen = false;
+    try { seen = sessionStorage.getItem('blitz-intro') === '1'; sessionStorage.setItem('blitz-intro', '1'); } catch (e) { /* privat */ }
+    var count = $('.loader__count', loader);
+    var heroReady = false, counted = false, fired = false;
+    function go() {
+      if (fired || !counted || !heroReady) return;
+      fired = true;
+      var tl = G.timeline();
+      tl.to(flash, { opacity: 0.9, duration: 0.07, ease: 'none' })
+        .to(flash, { opacity: 0, duration: 0.6, ease: 'power2.out' })
+        .to(loader, { clipPath: 'inset(0 0 100% 0)', duration: 1.05, ease: 'expo.inOut', onComplete: function () { loader.remove(); } }, 0.05)
+        .add(heroIn, 0.45);
+    }
+    window.addEventListener('blitz:hero-ready', function () { heroReady = true; go(); }, { once: true });
+    if (window.__blitzHeroReady) heroReady = true;
+    setTimeout(function () { heroReady = true; go(); }, 3200);
+    var o = { p: 0 };
+    G.to(o, {
+      p: 1, duration: seen ? 0.55 : 1.6, ease: 'power2.inOut',
+      onUpdate: function () { loader.style.setProperty('--p', o.p); count.textContent = String(Math.round(o.p * 100)).padStart(3, '0'); },
+      onComplete: function () { counted = true; (d.fonts && d.fonts.ready ? d.fonts.ready : Promise.resolve()).then(go); }
+    });
+  })();
+
+  /* ==========================================================================
+     SCROLL-ANIMATIONEN
+     ========================================================================== */
+  if (animate) {
+    $$('[data-split="chars"]').forEach(function (el) {
+      var chars = splitChars(el);
+      G.set(chars, { yPercent: 105, rotateX: -75, opacity: 0 });
+      onView(el, function () {
+        G.to(chars, { yPercent: 0, rotateX: 0, opacity: 1, duration: 1.2, ease: 'expo.out', stagger: 0.022 });
+      });
+    });
+
+    $$('.label').forEach(function (el) {
+      if (el.closest('.hero')) return;
+      G.set(el, { opacity: 0, x: -24 });
+      onView(el, function () { G.to(el, { opacity: 1, x: 0, duration: 1, ease: 'expo.out' }); });
+    });
+
+    $$('[data-reveal]').forEach(function (el) { G.set(el, { y: 44, opacity: 0 }); });
+    ST.batch('[data-reveal]', {
+      start: 'top 90%', once: true,
+      onEnter: function (els) { G.to(els, { y: 0, opacity: 1, duration: 1.2, ease: 'expo.out', stagger: 0.1, overwrite: true }); }
+    });
+    // Sicherheit: bereits passierte Elemente sofort zeigen
+    ST.addEventListener('refresh', function () {
+      $$('[data-reveal], .card').forEach(function (el) { if (el.getBoundingClientRect().bottom < 0) G.set(el, { y: 0, opacity: 1 }); });
+    });
+
+    // Karten: 3D-Auftritt
+    var cards = $$('.card');
+    G.set(cards, { y: 90, opacity: 0, rotationX: -14, transformPerspective: 1100, transformOrigin: '50% 0%' });
+    ST.batch(cards, {
+      start: 'top 90%', once: true,
+      onEnter: function (els) { G.to(els, { y: 0, opacity: 1, rotationX: 0, duration: 1.4, ease: 'expo.out', stagger: 0.12, overwrite: true }); }
+    });
+
+    // Statement: Wort für Wort „glüht“ beim Scrollen auf
+    var stmt = $('[data-scrub-words]');
+    if (stmt) {
+      var words = splitWords(stmt);
+      G.to(words, {
+        keyframes: { '0%': { color: 'rgba(239,234,226,0.14)' }, '45%': { color: '#ffb347' }, '100%': { color: '#efeae2' } },
+        ease: 'none', stagger: 0.12,
+        scrollTrigger: { trigger: stmt, start: 'top 82%', end: 'bottom 42%', scrub: 0.6 }
+      });
+    }
+
+    // Werte
+    $$('.value').forEach(function (v) { onView(v, function () { v.classList.add('is-in'); }); });
+
+    // Großes Hintergrundwort
+    G.fromTo('.pos__bgword span', { xPercent: 6 }, { xPercent: -38, ease: 'none', scrollTrigger: { trigger: '.pos', start: 'top bottom', end: 'bottom top', scrub: true } });
+
+    // Hero-Inhalt beim Herausscrollen
+    G.to('.hero__inner', { yPercent: -14, opacity: 0.2, ease: 'none', scrollTrigger: { trigger: hero, start: 'top top', end: 'bottom top', scrub: true } });
+  } else {
+    $$('.value').forEach(function (v) { v.classList.add('is-in'); });
+  }
+
+  /* ---------- Marquee ---------- */
+  var mq = $('.marquee');
+  if (mq) {
+    $$('.marquee__row', mq).forEach(function (row) { row.appendChild($('.marquee__track', row).cloneNode(true)); });
+    if (animate) {
+      mq.classList.add('is-gsap');
+      var tw = $$('.marquee__row', mq).map(function (row, i) {
+        var tracks = $$('.marquee__track', row);
+        return i === 0
+          ? G.to(tracks, { xPercent: -100, ease: 'none', duration: 46, repeat: -1 })
+          : G.fromTo(tracks, { xPercent: -100 }, { xPercent: 0, ease: 'none', duration: 80, repeat: -1 });
+      });
+      var skew = 0, speed = 1;
+      G.ticker.add(function () {
+        var v = lenis ? lenis.velocity : 0;
+        speed = lerp(speed, 1 + Math.min(Math.abs(v) * 0.09, 5), 0.08);
+        skew = lerp(skew, clamp(-v * 0.35, -8, 8), 0.1);
+        tw.forEach(function (t) { t.timeScale(speed); });
+        mq.style.setProperty('--skew', skew.toFixed(2) + 'deg');
+      });
+    }
+  }
+
+  /* ---------- Karten: Neigung & Lichtpunkt ---------- */
+  if (fine && animate) {
+    $$('[data-tilt]').forEach(function (card) {
+      var rxTo = G.quickTo(card, 'rotationX', { duration: 0.8, ease: 'power3' });
+      var ryTo = G.quickTo(card, 'rotationY', { duration: 0.8, ease: 'power3' });
+      card.addEventListener('pointermove', function (e) {
+        var r = card.getBoundingClientRect(), px = (e.clientX - r.left) / r.width, py = (e.clientY - r.top) / r.height;
+        card.style.setProperty('--mx', (px * 100).toFixed(1) + '%');
+        card.style.setProperty('--my', (py * 100).toFixed(1) + '%');
+        rxTo((0.5 - py) * 9); ryTo((px - 0.5) * 11);
+      });
+      card.addEventListener('pointerleave', function () { rxTo(0); ryTo(0); });
+    });
+  }
+
+  /* Karten-Links füllen das Formular vor */
+  d.addEventListener('click', function (e) {
+    var a = e.target.closest('[data-pick], [data-pick-hoehe]');
+    if (!a) return;
+    var v = a.getAttribute('data-pick'), h = a.getAttribute('data-pick-hoehe');
+    if (v) { var cb = d.querySelector('input[name="arbeit[]"][value="' + v + '"]'); if (cb) cb.checked = true; }
+    if (h) { var rb = d.querySelector('input[name="hoehe"][value="' + h + '"]'); if (rb) rb.checked = true; }
+  });
+
+  /* ==========================================================================
+     SCHWEISSPOSITIONEN
+     ========================================================================== */
+  (function positions() {
+    var box = $('[data-positions]');
+    if (!box) return;
+    var svg = $('.viewer__svg', box);
+    var plate = $('.v-plate', svg), groove = $('.v-groove', svg), bead = $('.v-bead', svg), grad = $('#beadG', svg);
+    var arc = $('.v-arc', svg), elec = $('.v-electrode', svg), ceiling = $('.v-ceiling', svg);
+    var arrowLine = $('.v-arrow line', svg), arrowHead = $('.v-arrow path', svg), sparksG = $('.v-sparks', svg);
+    var code = $('.viewer__code', box), title = $('.viewer__title', box), desc = $('.viewer__desc', box);
+    var tabs = $$('[data-pos]', box);
+
+    var WALL = [150, 70, 330, 88, 330, 348, 150, 356];
+    var POS = {
+      PA: { t: 'PA – Wannenlage', x: 'Das Werkstück liegt, geschweißt wird von oben. Die bequemste Lage, wenn sich das Bauteil drehen oder legen lässt.', plate: [92, 294, 388, 294, 420, 344, 60, 344], seam: [80, 319, 400, 319], ang: 28, ceil: 0 },
+      PC: { t: 'PC – Querposition', x: 'Die Naht läuft waagerecht an einer senkrechten Wand. Typisch bei stehenden Tanks und Rohren.', plate: WALL, seam: [154, 213, 326, 219], ang: 68, ceil: 0 },
+      PF: { t: 'PF – Steignaht', x: 'Senkrechte Naht, von unten nach oben. Das Schmelzbad stützt sich auf der erstarrten Naht ab und dringt tief ein – die Spezialität von Schweisstechnik Blitz.', plate: WALL, seam: [240, 350, 240, 82], ang: 145, ceil: 0 },
+      PG: { t: 'PG – Fallnaht', x: 'Senkrechte Naht, von oben nach unten. Schnell, aber mit weniger Einbrand – eher für dünnes Material.', plate: WALL, seam: [240, 82, 240, 350], ang: 38, ceil: 0 },
+      PE: { t: 'PE – Überkopf', x: 'Geschweißt wird von unten gegen die Decke. Anspruchsvoll, weil das Schmelzbad gegen die Schwerkraft gehalten werden muss.', plate: [92, 44, 388, 44, 420, 94, 60, 94], seam: [80, 69, 400, 69], ang: 205, ceil: 1, below: 1 }
+    };
+
+    var cur = { plate: WALL.slice(), seam: POS.PF.seam.slice(), ang: 145, ceil: 0 };
+    var from = null, to = POS.PF, morphStart = 0, MORPH = 750;
+    var weldStart = performance.now(), active = 'PF';
+    var running = false;
+    var sparks = [];
+    var NS = 'http://www.w3.org/2000/svg';
+    for (var i = 0; i < 26; i++) {
+      var c = d.createElementNS(NS, 'circle'); c.setAttribute('r', '1.4'); c.setAttribute('cx', '-20'); c.setAttribute('cy', '-20');
+      sparksG.appendChild(c); sparks.push({ el: c, x: 0, y: 0, vx: 0, vy: 0, life: 0 });
+    }
+    var sparkIdx = 0;
+
+    function ease(t) { return t < 0.5 ? 4 * t * t * t : 1 - Math.pow(-2 * t + 2, 3) / 2; }
+    function lerpArr(a, b, k) { return a.map(function (v, i) { return lerp(v, b[i], k); }); }
+    function setGeom(g) {
+      var p = g.plate;
+      plate.setAttribute('points', p[0] + ',' + p[1] + ' ' + p[2] + ',' + p[3] + ' ' + p[4] + ',' + p[5] + ' ' + p[6] + ',' + p[7]);
+      groove.setAttribute('x1', g.seam[0]); groove.setAttribute('y1', g.seam[1]); groove.setAttribute('x2', g.seam[2]); groove.setAttribute('y2', g.seam[3]);
+      ceiling.style.opacity = g.ceil;
+      // Pfeil parallel zur Naht
+      var dx = g.seam[2] - g.seam[0], dy = g.seam[3] - g.seam[1], L = Math.hypot(dx, dy) || 1, ux = dx / L, uy = dy / L;
+      var nx = -uy, ny = ux; if (nx < 0 || (nx === 0 && ny > 0)) { nx = -nx; ny = -ny; }
+      if (to && to.below) { nx = -nx; ny = -ny; }
+      var off = 38, ax = g.seam[0] + dx * 0.18 + nx * off, ay = g.seam[1] + dy * 0.18 + ny * off;
+      var bx = g.seam[0] + dx * 0.82 + nx * off, by = g.seam[1] + dy * 0.82 + ny * off;
+      arrowLine.setAttribute('x1', ax.toFixed(1)); arrowLine.setAttribute('y1', ay.toFixed(1));
+      arrowLine.setAttribute('x2', bx.toFixed(1)); arrowLine.setAttribute('y2', by.toFixed(1));
+      var hx = bx + ux * 12, hy = by + uy * 12;
+      arrowHead.setAttribute('d', 'M' + hx.toFixed(1) + ' ' + hy.toFixed(1) + 'L' + (bx + nx * 6).toFixed(1) + ' ' + (by + ny * 6).toFixed(1) + 'L' + (bx - nx * 6).toFixed(1) + ' ' + (by - ny * 6).toFixed(1) + 'Z');
+    }
+    function emit(x, y, n) {
+      for (var k = 0; k < n; k++) {
+        var s = sparks[sparkIdx]; sparkIdx = (sparkIdx + 1) % sparks.length;
+        var a = Math.random() * Math.PI * 2, sp = 60 + Math.random() * 160;
+        s.x = x; s.y = y; s.vx = Math.cos(a) * sp; s.vy = Math.sin(a) * sp - 40; s.life = 0.25 + Math.random() * 0.45; s.max = s.life;
+      }
+    }
+    var last = performance.now();
+    function frame(now) {
+      if (!running) return;
+      var dt = Math.min((now - last) / 1000, 0.05); last = now;
+      var morphing = false;
+      if (from) {
+        var k = clamp((now - morphStart) / MORPH, 0, 1), e = ease(k);
+        cur.plate = lerpArr(from.plate, to.plate, e); cur.seam = lerpArr(from.seam, to.seam, e);
+        cur.ang = lerp(from.ang, to.ang, e); cur.ceil = lerp(from.ceil, to.ceil, e);
+        setGeom(cur);
+        morphing = k < 1;
+        if (!morphing) { from = null; weldStart = now; }
+      }
+      var s0x = cur.seam[0], s0y = cur.seam[1], s1x = cur.seam[2], s1y = cur.seam[3];
+      var t = (now - weldStart) / 1000, WELD = 2.9, CYCLE = 4.4;
+      var ph = morphing ? 0 : t % CYCLE, p = clamp(ph / WELD, 0, 1);
+      var on = !morphing && ph < WELD;
+      var tx = lerp(s0x, s1x, p), ty = lerp(s0y, s1y, p);
+      var wv = on ? Math.sin(now / 45) * 2.2 : 0;
+      var dx = s1x - s0x, dy = s1y - s0y, L = Math.hypot(dx, dy) || 1;
+      tx += (-dy / L) * wv; ty += (dx / L) * wv;
+      bead.setAttribute('x1', s0x); bead.setAttribute('y1', s0y);
+      bead.setAttribute('x2', (morphing ? s0x : tx).toFixed(1)); bead.setAttribute('y2', (morphing ? s0y : ty).toFixed(1));
+      bead.style.opacity = morphing ? 0 : ph > CYCLE - 0.45 ? clamp((CYCLE - ph) / 0.45, 0, 1) : 1;
+      grad.setAttribute('x1', s0x); grad.setAttribute('y1', s0y); grad.setAttribute('x2', tx.toFixed(1)); grad.setAttribute('y2', ty.toFixed(1));
+      var away = on ? 0 : morphing ? 60 : Math.min((ph - WELD) * 90, 60);
+      // Elektrode weicht entlang ihrer Achse zurück (Stab zeigt bei rotate(0) nach oben)
+      var ar = cur.ang * Math.PI / 180;
+      var ex = tx + Math.sin(ar) * away, ey = ty - Math.cos(ar) * away;
+      elec.setAttribute('transform', 'translate(' + ex.toFixed(1) + ' ' + ey.toFixed(1) + ') rotate(' + cur.ang.toFixed(1) + ')');
+      arc.setAttribute('cx', tx.toFixed(1)); arc.setAttribute('cy', ty.toFixed(1));
+      arc.setAttribute('r', on ? (20 + Math.random() * 12).toFixed(1) : '0');
+      arc.style.opacity = on ? 0.75 + Math.random() * 0.25 : 0;
+      if (on) emit(tx, ty, Math.random() < 0.7 ? 1 : 2);
+      sparks.forEach(function (s) {
+        if (s.life <= 0) { s.el.setAttribute('cx', '-20'); return; }
+        s.life -= dt; s.vy += 380 * dt; s.x += s.vx * dt; s.y += s.vy * dt;
+        s.el.setAttribute('cx', s.x.toFixed(1)); s.el.setAttribute('cy', s.y.toFixed(1));
+        s.el.setAttribute('opacity', clamp(s.life / s.max, 0, 1).toFixed(2));
+      });
+      requestAnimationFrame(frame);
+    }
+
+    function select(key, user) {
+      if (!POS[key] || (key === active && user)) return;
+      active = key;
+      from = { plate: cur.plate.slice(), seam: cur.seam.slice(), ang: cur.ang, ceil: cur.ceil };
+      to = POS[key]; morphStart = performance.now();
+      if (reduced) { MORPH = 1; }
+      tabs.forEach(function (b) { b.setAttribute('aria-pressed', String(b.getAttribute('data-pos') === key)); });
+      code.textContent = key;
+      if (animate) {
+        G.timeline()
+          .to([title, desc], { opacity: 0, y: -8, duration: 0.2, ease: 'power2.in' })
+          .add(function () { title.textContent = POS[key].t; desc.textContent = POS[key].x; })
+          .to([title, desc], { opacity: 1, y: 0, duration: 0.55, ease: 'expo.out', stagger: 0.06 });
+        G.fromTo(code, { opacity: 0, x: 30 }, { opacity: 1, x: 0, duration: 0.9, ease: 'expo.out' });
+      } else { title.textContent = POS[key].t; desc.textContent = POS[key].x; }
+      if (!running) { cur.plate = to.plate.slice(); cur.seam = to.seam.slice(); cur.ang = to.ang; cur.ceil = to.ceil; from = null; setGeom(cur); staticFrame(); }
+    }
+    function staticFrame() {
+      var sx = cur.seam[0], sy = cur.seam[1], ex = lerp(cur.seam[0], cur.seam[2], 0.7), ey = lerp(cur.seam[1], cur.seam[3], 0.7);
+      bead.setAttribute('x1', sx); bead.setAttribute('y1', sy); bead.setAttribute('x2', ex); bead.setAttribute('y2', ey); bead.style.opacity = 1;
+      grad.setAttribute('x1', sx); grad.setAttribute('y1', sy); grad.setAttribute('x2', ex); grad.setAttribute('y2', ey);
+      arc.setAttribute('cx', ex); arc.setAttribute('cy', ey); arc.setAttribute('r', 24);
+      elec.setAttribute('transform', 'translate(' + ex + ' ' + ey + ') rotate(' + cur.ang + ')');
+    }
+    tabs.forEach(function (b) { b.addEventListener('click', function () { select(b.getAttribute('data-pos'), true); }); });
+    box.querySelector('.viewer__tabs').addEventListener('keydown', function (e) {
+      if (e.key !== 'ArrowRight' && e.key !== 'ArrowLeft') return;
+      var i = tabs.indexOf(d.activeElement); if (i < 0) return;
+      var n = tabs[(i + (e.key === 'ArrowRight' ? 1 : tabs.length - 1)) % tabs.length];
+      n.focus(); n.click(); e.preventDefault();
+    });
+
+    setGeom(cur);
+    if (reduced) { staticFrame(); return; }
+    if ('IntersectionObserver' in window) {
+      new IntersectionObserver(function (en) {
+        var vis = en[0].isIntersecting;
+        if (vis && !running) { running = true; last = performance.now(); requestAnimationFrame(frame); }
+        else if (!vis) running = false;
+      }).observe(box);
+    } else { running = true; requestAnimationFrame(frame); }
+  })();
+
+  /* ==========================================================================
+     SCHWEISSERZEICHEN (3D-Münze)
+     ========================================================================== */
+  (function coin() {
+    var c = $('[data-coin]');
+    if (!c) return;
+    var body = $('.coin__body', c), edge = $('.coin__edge', c);
+    for (var i = 0; i < 18; i++) {
+      var l = d.createElement('i'); l.style.transform = 'translateZ(' + (-8.5 + i) + 'px)'; edge.appendChild(l);
+    }
+    if (!animate) return;
+    var st = { ry: -40, rx: 10, mx: 0, my: 0 };
+    function apply() {
+      var ry = st.ry + st.mx * 26, rx = st.rx - st.my * 18;
+      body.style.setProperty('--ry', ry.toFixed(2) + 'deg');
+      body.style.setProperty('--rx', rx.toFixed(2) + 'deg');
+      var sheen = (((ry % 360) + 360) % 360) / 360 * 100;
+      c.style.setProperty('--sheen', (100 - sheen).toFixed(1) + '%');
+      $$('.coin__face', c).forEach(function (f) { f.style.setProperty('--sheen', (100 - sheen).toFixed(1) + '%'); });
+    }
+    G.to(st, { ry: 320, ease: 'none', onUpdate: apply, scrollTrigger: { trigger: '.mark', start: 'top bottom', end: 'bottom top', scrub: 1 } });
+    if (fine) {
+      var sec = $('.mark');
+      sec.addEventListener('pointermove', function (e) {
+        var r = c.getBoundingClientRect();
+        G.to(st, { mx: clamp((e.clientX - (r.left + r.width / 2)) / innerWidth * 2, -1, 1), my: clamp((e.clientY - (r.top + r.height / 2)) / innerHeight * 2, -1, 1), duration: 1, ease: 'power3', onUpdate: apply });
+      });
+      sec.addEventListener('pointerleave', function () { G.to(st, { mx: 0, my: 0, duration: 1.2, ease: 'power3', onUpdate: apply }); });
+    }
+    apply();
+  })();
+
+  /* ==========================================================================
+     ABLAUF (Naht läuft durch die Schritte)
+     ========================================================================== */
+  (function process() {
+    var sec = $('.process'), track = $('.process__track', sec);
+    if (!track) return;
+    var steps = $$('.step', track);
+    var marks = [];
+    function measure(vertical) {
+      marks = steps.map(function (s) {
+        return vertical ? (s.offsetTop + 8) / track.offsetHeight : s.offsetLeft / track.offsetWidth;
+      });
+    }
+    function setP(p, vertical) {
+      track.style.setProperty('--p', p.toFixed(4));
+      track.style.setProperty('--on', p > 0.002 && p < 0.998 ? 1 : 0);
+      steps.forEach(function (s, i) { s.classList.toggle('is-on', p >= marks[i] - 0.005); });
+    }
+    if (!animate) { measure(innerWidth <= 860); setP(1); return; }
+    var mmq = G.matchMedia();
+    mmq.add('(min-width: 861px)', function () {
+      measure(false);
+      var o = { p: 0 };
+      G.to(o, {
+        p: 1, ease: 'none', onUpdate: function () { setP(o.p); },
+        scrollTrigger: { trigger: '.process__pin', start: function () { return $('.process__pin').offsetHeight > innerHeight * 0.86 ? 'top top+=70' : 'center center'; }, end: '+=130%', pin: true, scrub: 0.8, onRefresh: function () { measure(false); } }
+      });
+    });
+    mmq.add('(max-width: 860px)', function () {
+      measure(true);
+      var o = { p: 0 };
+      G.to(o, {
+        p: 1, ease: 'none', onUpdate: function () { setP(o.p, true); },
+        scrollTrigger: { trigger: track, start: 'top 72%', end: 'bottom 55%', scrub: 0.8, onRefresh: function () { measure(true); } }
+      });
+    });
+  })();
+
+  /* ==========================================================================
+     EINSATZGEBIET
+     ========================================================================== */
+  (function area() {
+    var map = $('[data-map]');
+    if (!map) return;
+    var lines = $$('.map__lines line', map), towns = $$('.town', map), list = $$('.towns li');
+    var sweep = $('.map__sweep', map), map3d = $('.map3d', map);
+    function hot(name, on) {
+      towns.concat(list).forEach(function (el) { if (el.getAttribute('data-town') === name) el.classList.toggle('is-hot', on); });
+    }
+    towns.concat(list).forEach(function (el) {
+      var n = el.getAttribute('data-town');
+      el.addEventListener('pointerenter', function () { hot(n, true); });
+      el.addEventListener('pointerleave', function () { hot(n, false); });
+    });
+    if (!animate) return;
+    G.set(towns, { opacity: 0 });
+    onView(map, function () {
+      G.to(lines, { strokeDashoffset: 0, duration: 1.6, ease: 'power3.out', stagger: 0.09 });
+      G.to(towns, { opacity: 1, duration: 0.8, ease: 'power2.out', stagger: 0.09, delay: 0.5 });
+    }, '0px 0px -20% 0px');
+    var ang = 0, vis = false;
+    new IntersectionObserver(function (en) { vis = en[0].isIntersecting; }).observe(map);
+    G.ticker.add(function (t, dt) {
+      if (!vis) return;
+      ang = (ang + dt * 0.05) % 360;
+      sweep.setAttribute('transform', 'rotate(' + (-ang).toFixed(2) + ')');
+    });
+    if (fine) {
+      var rxTo = G.quickTo(map3d, 'rotationX', { duration: 1.2, ease: 'power3' });
+      var rzTo = G.quickTo(map3d, 'rotationZ', { duration: 1.2, ease: 'power3' });
+      G.set(map3d, { rotationX: 30, rotationZ: -5 });
+      map.addEventListener('pointermove', function (e) {
+        var r = map.getBoundingClientRect();
+        rxTo(30 - ((e.clientY - r.top) / r.height - 0.5) * 14);
+        rzTo(-5 + ((e.clientX - r.left) / r.width - 0.5) * 8);
+      });
+      map.addEventListener('pointerleave', function () { rxTo(30); rzTo(-5); });
+    }
+  })();
+
+  /* ==========================================================================
+     FAQ
+     ========================================================================== */
+  $$('[data-faq] .qa').forEach(function (qa, i) {
+    var btn = $('button', qa);
+    function set(open) { btn.setAttribute('aria-expanded', String(open)); qa.classList.toggle('is-open', open); }
+    if (i === 0) set(true);
+    btn.addEventListener('click', function () {
+      set(btn.getAttribute('aria-expanded') !== 'true');
+      if (hasG) setTimeout(function () { ST.refresh(); }, 650);
+    });
+  });
+
+  /* ==========================================================================
+     ANFRAGE-FORMULAR (3 Schritte)
+     ========================================================================== */
+  (function wizard() {
+    var form = $('[data-wizard]');
+    if (!form) return;
+    var panels = $$('.wizard__panel', form), prog = $$('.wizard__progress li', form), seam = $('.wizard__seam', form);
+    var prev = $('[data-prev]', form), next = $('[data-next]', form), submit = $('[data-submit]', form);
+    var err = $('.wizard__error', form), done = $('.wizard__done', form);
+    var step = 1;
+    var PHONE = '<a href="tel:+4915164325150">0151 64325150</a>';
+
+    function showErr(html) { err.innerHTML = html; err.hidden = false; if (animate) G.fromTo(err, { x: -8 }, { x: 0, duration: 0.5, ease: 'elastic.out(1, 0.4)' }); }
+    function hideErr() { err.hidden = true; }
+    function ui() {
+      prog.forEach(function (li, i) { li.classList.toggle('is-active', i === step - 1); li.classList.toggle('is-done', i < step - 1); });
+      seam.style.setProperty('--p', (step / 3).toFixed(4));
+      prev.hidden = step === 1; next.hidden = step === 3; submit.hidden = step !== 3;
+    }
+    function go(n) {
+      var a = panels[step - 1], b = panels[n - 1], dir = n > step ? 1 : -1;
+      step = n; ui();
+      function swap() {
+        a.hidden = true; b.hidden = false;
+        if (animate) G.fromTo(b, { opacity: 0, x: 34 * dir }, { opacity: 1, x: 0, duration: 0.6, ease: 'expo.out' });
+        b.setAttribute('tabindex', '-1'); b.focus({ preventScroll: true });
+        if (hasG) ST.refresh();
+      }
+      if (animate) G.to(a, { opacity: 0, x: -24 * dir, duration: 0.22, ease: 'power2.in', onComplete: swap }); else swap();
+    }
+    function val(n) {
+      if (n === 1 && !form.querySelector('input[name="arbeit[]"]:checked')) return 'Bitte wählen Sie mindestens eine Arbeit aus.';
+      if (n === 3) {
+        var name = form.elements.name.value.trim(), tel = form.elements.telefon.value.trim(), mail = form.elements.email.value.trim();
+        if (!name) return 'Bitte geben Sie Ihren Namen an.';
+        if (!tel && !mail) return 'Bitte geben Sie eine Telefonnummer oder E-Mail-Adresse an.';
+        if (mail && !/^[^\s@]+@[^\s@]+\.[^\s@]{2,}$/.test(mail)) return 'Bitte prüfen Sie die E-Mail-Adresse.';
+        if (!form.elements.einwilligung.checked) return 'Bitte bestätigen Sie die Einwilligung zur Bearbeitung Ihrer Angaben.';
+      }
+      return '';
+    }
+    next.addEventListener('click', function () {
+      var m = val(step); if (m) { showErr(m); return; }
+      hideErr(); go(step + 1);
+    });
+    prev.addEventListener('click', function () { hideErr(); go(step - 1); });
+    form.addEventListener('change', function () { if (!err.hidden && !val(step)) hideErr(); });
+
+    form.addEventListener('submit', function (e) {
+      e.preventDefault();
+      if (step < 3) { next.click(); return; }
+      var m = val(3); if (m) { showErr(m); return; }
+      hideErr(); alt.hidden = true;
+      // Statisches Hosting (z. B. GitHub Pages) hat kein PHP → direkt vorbereitete Nachricht anbieten
+      if (STATIC) { showAlt('Fast geschafft: Ihre Angaben sind schon eingetragen – schicken Sie die Anfrage mit einem Klick ab.'); return; }
+      submit.disabled = true;
+      var label = $('span', submit), old = label.textContent;
+      label.textContent = 'Wird gesendet …';
+      fetch(form.getAttribute('action'), { method: 'POST', body: new FormData(form), headers: { Accept: 'application/json' } })
+        .then(function (r) {
+          return r.json().then(
+            function (j) { return { ok: r.ok && j && j.ok, j: j, status: r.status }; },
+            function () { return { ok: false, transport: true }; }
+          );
+        }, function () { return { ok: false, transport: true }; })
+        .then(function (res) {
+          if (res.ok) { finish(); return; }
+          if (res.transport || res.status >= 500 || res.status === 429) {
+            showAlt((res.j && res.j.message ? res.j.message + ' ' : 'Die Anfrage konnte nicht direkt gesendet werden. ') + 'Schicken Sie sie einfach per WhatsApp oder E-Mail – Ihre Angaben sind schon eingetragen.');
+          } else {
+            showErr((res.j && res.j.message) || 'Bitte prüfen Sie Ihre Angaben.');
+          }
+        })
+        .then(function () { submit.disabled = false; label.textContent = old; });
+    });
+
+    /* Ausweichweg: vorbereitete Nachricht per WhatsApp oder E-Mail */
+    var STATIC = /\.github\.io$/.test(location.hostname) || location.protocol === 'file:';
+    var alt = d.createElement('div');
+    alt.className = 'wizard__alt'; alt.hidden = true; alt.setAttribute('role', 'status');
+    err.parentNode.insertBefore(alt, err.nextSibling);
+    function checked(name) { return $$('input[name="' + name + '"]:checked', form).map(function (i) { return i.value; }).join(', '); }
+    function summary() {
+      var f = form.elements;
+      return [
+        'Anfrage über die Website',
+        '',
+        'Arbeit: ' + (checked('arbeit[]') || '–'),
+        'Wo: ' + (checked('ort_art') || '–'),
+        'In der Höhe: ' + (checked('hoehe') || '–'),
+        'PLZ und Ort: ' + (f.ort.value.trim() || '–'),
+        'Wunschtermin: ' + f.termin.value,
+        'Beschreibung: ' + (f.beschreibung.value.trim() || '–'),
+        '',
+        'Name: ' + f.name.value.trim(),
+        'Telefon: ' + (f.telefon.value.trim() || '–'),
+        'E-Mail: ' + (f.email.value.trim() || '–')
+      ].join('\n');
+    }
+    function showAlt(intro) {
+      var text = summary();
+      var wa = 'https://wa.me/4915164325150?text=' + encodeURIComponent(text);
+      var mail = 'mailto:info@schweisstechnik-blitz.de?subject=' + encodeURIComponent('Anfrage über die Website – ' + form.elements.name.value.trim()) + '&body=' + encodeURIComponent(text);
+      alt.innerHTML = '<p></p><div class="wizard__alt-btns">' +
+        '<a class="btn btn--molten btn--sm" data-alt href="' + wa + '" target="_blank" rel="noopener"><span>Per WhatsApp senden</span></a>' +
+        '<a class="btn btn--ghost btn--sm" data-alt href="' + mail + '"><span>Per E-Mail senden</span></a></div>';
+      alt.firstChild.textContent = intro;
+      alt.hidden = false;
+      if (animate) G.fromTo(alt, { opacity: 0, y: 10 }, { opacity: 1, y: 0, duration: 0.6, ease: 'expo.out' });
+    }
+    alt.addEventListener('click', function (e) {
+      if (!e.target.closest('[data-alt]')) return;
+      setTimeout(function () {
+        $('p', done).innerHTML = 'Ihre Anfrage ist in WhatsApp bzw. Ihrem E-Mail-Programm vorbereitet – bitte dort noch auf <b>Senden</b> tippen. Eilt es, rufen Sie einfach an: ' + PHONE + '.';
+        finish();
+      }, 400);
+    });
+    function finish() {
+      form.classList.add('is-done'); done.hidden = false; done.focus({ preventScroll: true });
+      if (animate) G.fromTo(done, { opacity: 0, y: 20 }, { opacity: 1, y: 0, duration: 0.9, ease: 'expo.out' });
+      if (hasG) ST.refresh();
+    }
+    ui();
+  })();
+
+  /* ==========================================================================
+     FOOTER-WORT (3D, vom „Lichtbogen“ beleuchtet)
+     ========================================================================== */
+  (function word() {
+    var w = $('[data-word3d]');
+    if (!w) return;
+    var span = $('span', w);
+    if (animate) {
+      G.fromTo(span, { '--rx': '62deg' }, { '--rx': '16deg', ease: 'none', scrollTrigger: { trigger: w, start: 'top bottom', end: 'bottom 85%', scrub: 1 } });
+    }
+    if (fine) {
+      w.parentElement.parentElement.addEventListener('pointermove', function (e) {
+        var r = span.getBoundingClientRect();
+        span.style.setProperty('--mx', ((e.clientX - r.left) / r.width * 100).toFixed(1) + '%');
+        span.style.setProperty('--my', ((e.clientY - r.top) / r.height * 100).toFixed(1) + '%');
+        span.style.setProperty('--ry', (((e.clientX / innerWidth) - 0.5) * 16).toFixed(2) + 'deg');
+      });
+    }
+  })();
+
+  /* Layout nach dem Laden der Schriften neu vermessen */
+  if (hasG) {
+    (d.fonts && d.fonts.ready ? d.fonts.ready : Promise.resolve()).then(function () { ST.refresh(); });
+    addEventListener('load', function () { ST.refresh(); });
+  }
+})();
