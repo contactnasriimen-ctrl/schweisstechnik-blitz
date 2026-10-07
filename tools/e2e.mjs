@@ -25,7 +25,7 @@ async function open(w, h, opts = {}) {
 {
   const { page, errors } = await open(1440, 900);
   ok('Loader entfernt', !(await page.$('.loader')));
-  ok('H1 lesbar (aria-label)', (await page.$eval('.hero__title', (e) => e.getAttribute('aria-label'))) === 'Schweißarbeiten, die halten.');
+  ok('H1 lesbar (aria-label)', (await page.$eval('.hero__h1', (e) => e.getAttribute('aria-label'))).includes('Schweißarbeiten, die halten.'));
   await page.evaluate(() => document.querySelector('#steignaht').scrollIntoView());
   await sleep(1500);
   await page.click('[data-pos="PE"]');
@@ -44,25 +44,25 @@ async function open(w, h, opts = {}) {
   ok('Karten-Link wählt Arbeit vor', await page.$eval('input[value="Rohr oder Leitung"]', (e) => e.checked));
   await page.evaluate(() => { document.querySelector('input[value="Rohr oder Leitung"]').checked = false; });
   await page.click('[data-next]'); await sleep(400);
-  ok('Fehler ohne Auswahl', await page.$eval('.wizard__error', (e) => !e.hidden && e.textContent.includes('mindestens eine')));
+  ok('Fehler ohne Auswahl', await page.$eval('[data-wizard] .wizard__error', (e) => !e.hidden && e.textContent.includes('mindestens eine')));
   await page.click('input[value="Tank oder Behälter"]');
   await page.click('input[value="Reparatur"]');
   await page.click('[data-next]'); await sleep(900);
   ok('Schritt 2 sichtbar', await page.$eval('[data-step="2"]', (e) => !e.hidden));
   await page.click('input[value="Auf einer Baustelle"]');
   await page.click('input[value="Ja, Gerüst oder Bühne nötig"]');
-  await page.type('input[name="ort"]', '87600 Kaufbeuren');
-  await page.type('textarea[name="beschreibung"]', 'Riss am Stutzen eines stehenden Heizöltanks, ca. 2 m hoch.');
+  await page.type('[data-wizard] input[name="ort"]', '87600 Kaufbeuren');
+  await page.type('[data-wizard] textarea[name="beschreibung"]', 'Riss am Stutzen eines stehenden Heizöltanks, ca. 2 m hoch.');
   await page.click('[data-next]'); await sleep(900);
   ok('Schritt 3 sichtbar', await page.$eval('[data-step="3"]', (e) => !e.hidden));
   await page.click('[data-submit]'); await sleep(400);
-  ok('Fehler ohne Name', await page.$eval('.wizard__error', (e) => !e.hidden && e.textContent.includes('Namen')));
-  await page.type('input[name="name"]', 'Max Mustermann');
-  await page.type('input[name="telefon"]', '0170 1234567');
+  ok('Fehler ohne Name', await page.$eval('[data-wizard] .wizard__error', (e) => !e.hidden && e.textContent.includes('Namen')));
+  await page.type('[data-wizard] input[name="name"]', 'Max Mustermann');
+  await page.type('[data-wizard] input[name="telefon"]', '0170 1234567');
   await page.click('[data-submit]'); await sleep(400);
-  ok('Fehler ohne Einwilligung', await page.$eval('.wizard__error', (e) => !e.hidden && e.textContent.includes('Einwilligung')));
-  await page.click('input[name="einwilligung"]');
-  const count = () => (fs.existsSync('data/outbox') ? fs.readdirSync('data/outbox').length : 0);
+  ok('Fehler ohne Einwilligung', await page.$eval('[data-wizard] .wizard__error', (e) => !e.hidden && e.textContent.includes('Einwilligung')));
+  await page.click('[data-wizard] input[name="einwilligung"]');
+  const count = () => (fs.existsSync('static/data/outbox') ? fs.readdirSync('static/data/outbox').length : 0);
   const before = count();
   await page.click('[data-submit]'); await sleep(2500);
   ok('Erfolgsmeldung', await page.$eval('.wizard__done', (e) => !e.hidden));
@@ -107,7 +107,7 @@ for (const w of [768, 1024, 1280]) {
 }
 
 /* Rechtliche Seiten */
-for (const p of ['impressum.html', 'datenschutz.html']) {
+for (const p of ['impressum/', 'datenschutz/', 'schweisser/muenchen/', 'leistungen/baustelle-und-hoehe/']) {
   const page = await browser.newPage();
   const r = await page.goto('http://localhost:8091/' + p);
   ok(p + ' erreichbar', r.status() === 200);

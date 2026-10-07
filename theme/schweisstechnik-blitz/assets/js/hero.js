@@ -4,24 +4,37 @@
 import * as THREE from '../vendor/three/build/three.module.min.js';
 import { RoomEnvironment } from '../vendor/three/jsm/environments/RoomEnvironment.js';
 
-const hero = document.querySelector('.hero');
-const canvas = document.getElementById('hero-canvas');
 const reduced = matchMedia('(prefers-reduced-motion: reduce)').matches;
+let readyFired = false;
 
 function ready() {
+  if (readyFired) return;
+  readyFired = true;
   window.__blitzHeroReady = true;
   window.dispatchEvent(new CustomEvent('blitz:hero-ready'));
 }
 
-try {
-  if (hero && canvas) init(); else ready();
-} catch (err) {
-  console.warn('[hero] WebGL nicht verfügbar:', err);
-  hero && hero.classList.add('no-webgl');
-  ready();
+/* Startet die Szene für einen Hero (mehrfach aufrufbar, z. B. vom Elementor-Editor) */
+function boot(hero) {
+  if (!hero || hero.__blitz3d) return;
+  const canvas = hero.querySelector('.hero__canvas');
+  if (!canvas) return;
+  hero.__blitz3d = true;
+  try {
+    init(hero, canvas);
+  } catch (err) {
+    console.warn('[hero] WebGL nicht verfügbar:', err);
+    hero.classList.add('no-webgl');
+    ready();
+  }
 }
+window.BlitzHero3D = boot;
+document.querySelectorAll('.hero').forEach(boot);
+if (!document.querySelector('.hero__canvas')) ready();
 
-function init() {
+function init(hero, canvas) {
+  const stage = canvas.parentElement;
+  const withForm = hero.classList.contains('hero--form');
   const small = Math.min(innerWidth, innerHeight) < 700 || matchMedia('(pointer: coarse)').matches;
 
   /* ---------- Maße & Zeitplan ---------- */
@@ -379,7 +392,7 @@ function init() {
   let W = 1, H = 1;
   const base = new THREE.Vector3(0, 0.35, 12.5);
   function resize() {
-    W = hero.clientWidth; H = hero.clientHeight;
+    W = Math.max(stage.clientWidth, 1); H = Math.max(stage.clientHeight, 1);
     renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, small ? 1.5 : 2));
     renderer.setSize(W, H, false);
     const aspect = W / H;
@@ -388,10 +401,31 @@ function init() {
     camera.updateProjectionMatrix();
     const visH = 2 * Math.tan(THREE.MathUtils.degToRad(camera.fov / 2)) * base.z;
     const visW = visH * aspect;
-    if (aspect >= 1.2) rig.position.set(visW * 0.235, -0.1, 0);
+    if (aspect >= 1.2) rig.position.set(visW * (withForm && W > 1080 ? 0.075 : 0.235), -0.1, 0);
     else if (aspect >= 0.75) rig.position.set(visW * 0.2, 0.2, 0);
     else rig.position.set(visW * 0.2, 1.6, -0.5);
+    measureObstacles();
     if (reduced) renderStill();
+  }
+
+  /* Texte und Formular, die von den Hinweisen nicht verdeckt werden dürfen */
+  let obstacles = [];
+  const tagSize = new Map();
+  function rectOf(el, text) {
+    if (text) {
+      const range = document.createRange();
+      range.selectNodeContents(el);
+      return range.getBoundingClientRect();
+    }
+    return el.getBoundingClientRect();
+  }
+  function measureObstacles() {
+    const sr = stage.getBoundingClientRect();
+    const list = [];
+    hero.querySelectorAll('.eyebrow, .hero__l2, .hero__cta > *, .hero__form, .hero__facts > div, .crumbs').forEach((el) => list.push(rectOf(el, false)));
+    hero.querySelectorAll('.hero__l1, .hero__lead').forEach((el) => list.push(rectOf(el, true)));
+    obstacles = list.filter((r) => r.width > 0).map((r) => ({ l: r.left - sr.left - 12, t: r.top - sr.top - 12, r: r.right - sr.left + 12, b: r.bottom - sr.top + 12 }));
+    hero.querySelectorAll('.tag').forEach((t) => { const b = t.querySelector('.tag__body'); tagSize.set(t, b ? [b.offsetWidth, b.offsetHeight] : [0, 0]); });
   }
 
   /* ---------- Hinweise (HTML) an 3D-Punkte heften ---------- */
@@ -405,7 +439,18 @@ function init() {
     rig.localToWorld(tmp);
     tmp.project(camera);
     const sx = (tmp.x * 0.5 + 0.5) * W, sy = (-tmp.y * 0.5 + 0.5) * H;
-    const vis = show && tmp.z < 1 && sx > 260 && sx < W - 40 && sy > 110 && sy < H - 120;
+    let vis = show && tmp.z < 1 && sx > 40 && sx < W - 40 && sy > 110 && sy < H - 120;
+    if (vis) {
+      const sz = tagSize.get(el) || [0, 0];
+      const left = el.classList.contains('tag--arc');
+      const box = left ? { l: sx - 94 - sz[0], r: sx + 6 } : { l: sx - 6, r: sx + 94 + sz[0] };
+      box.t = sy - sz[1] / 2; box.b = sy + sz[1] / 2;
+      if (box.l < 8 || box.r > W - 8) vis = false;
+      for (let i = 0; vis && i < obstacles.length; i++) {
+        const o = obstacles[i];
+        if (box.l < o.r && box.r > o.l && box.t < o.b && box.b > o.t) vis = false;
+      }
+    }
     el.classList.toggle('is-on', vis);
     if (vis) el.style.transform = `translate3d(${sx.toFixed(1)}px, ${sy.toFixed(1)}px, 0)`;
   }
@@ -478,7 +523,7 @@ function init() {
     // Kamera
     mouse.x += (mouse.tx - mouse.x) * 0.04;
     mouse.y += (mouse.ty - mouse.y) * 0.04;
-    const sp = Math.min(Math.max(window.scrollY / Math.max(H, 1), 0), 1);
+    const sp = Math.min(Math.max(-stage.getBoundingClientRect().top / Math.max(H, 1), 0), 1);
     camera.position.set(base.x + mouse.x * 1.3, base.y - mouse.y * 0.7 + sp * 1.2, base.z - sp * 2.6);
     camera.lookAt(0, 0.1 + sp * 0.6, 0);
     rig.rotation.y = -0.52 + Math.sin(time * 0.17) * 0.05 + mouse.x * 0.08 + sp * 0.3;
@@ -505,8 +550,10 @@ function init() {
 
   /* ---------- Schleife (pausiert außerhalb des Sichtfelds) ---------- */
   const clock = new THREE.Clock();
-  let inView = true, running = false;
+  let inView = true, running = false, frameNo = 0;
   function tick() {
+    if (!canvas.isConnected) { dispose(); return; }
+    if (++frameNo % 45 === 0) measureObstacles();
     const dt = Math.min(clock.getDelta(), 0.05);
     update(dt, true);
     renderer.render(scene, camera);
@@ -519,8 +566,18 @@ function init() {
     renderer.setAnimationLoop(v ? tick : null);
   }
 
+  function dispose() {
+    renderer.setAnimationLoop(null);
+    removeEventListener('resize', resize);
+    if (ro) ro.disconnect();
+    renderer.dispose();
+  }
+
   resize();
   addEventListener('resize', resize);
+  const ro = 'ResizeObserver' in window ? new ResizeObserver(() => resize()) : null;
+  if (ro) ro.observe(stage);
+  if (document.fonts && document.fonts.ready) document.fonts.ready.then(measureObstacles);
   canvas.addEventListener('webglcontextlost', (e) => { e.preventDefault(); setRunning(false); hero.classList.add('no-webgl'); });
 
   if (reduced) {

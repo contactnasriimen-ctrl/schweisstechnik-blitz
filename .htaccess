@@ -27,11 +27,11 @@ AddDefaultCharset UTF-8
 AddType font/woff2 .woff2
 AddType text/javascript .js .mjs
 
-# alte WordPress-Adressen auf die neuen Anker umleiten
+# alte Einzeldateien auf die neuen Adressen umleiten
 <IfModule mod_rewrite.c>
   RewriteEngine On
-  RewriteRule ^impressum/?$ /impressum.html [R=301,L]
-  RewriteRule ^datenschutz/?$ /datenschutz.html [R=301,L]
-  RewriteRule ^leistungen/.*$ /#leistungen [R=301,NE,L]
-  RewriteRule ^schweisser/.*$ /#einsatzgebiet [R=301,NE,L]
+  RewriteRule ^impressum.html$ /impressum/ [R=301,L]
+  RewriteRule ^datenschutz.html$ /datenschutz/ [R=301,L]
 </IfModule>
+
+ErrorDocument 404 /404.html

@@ -15,7 +15,7 @@ page.on('console', (m) => { if (m.type() === 'error' || m.type() === 'warning') 
 page.on('requestfailed', (r) => errors.push('failed: ' + r.url()));
 await page.setViewport({ width: +w, height: +h, deviceScaleFactor: 1, isMobile: mobile, hasTouch: mobile });
 if (mobile) await page.setUserAgent('Mozilla/5.0 (Linux; Android 14; Pixel 8) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/140.0 Mobile Safari/537.36');
-await page.goto('http://localhost:8091/', { waitUntil: 'networkidle2', timeout: 60000 });
+await page.goto('http://localhost:8091' + (process.env.SHOT_PATH || '/'), { waitUntil: 'networkidle2', timeout: 60000 });
 await new Promise((r) => setTimeout(r, 5000));
 let i = 0;
 for (const spec of sels) {

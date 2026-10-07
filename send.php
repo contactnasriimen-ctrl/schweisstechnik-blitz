@@ -91,8 +91,13 @@ $telefon  = clean($_POST['telefon'] ?? '', 40);
 $email    = clean($_POST['email'] ?? '', 160);
 $consent  = ($_POST['einwilligung'] ?? '') === '1';
 
+$quelle = clean($_POST['quelle'] ?? '') === 'hero' ? 'Schnellanfrage' : 'Anfrageformular';
 if (!$arbeiten) {
-    reply(422, false, 'Bitte wählen Sie mindestens eine Arbeit aus.');
+    if ($quelle === 'Schnellanfrage') {
+        $arbeiten = ['Nicht angegeben'];
+    } else {
+        reply(422, false, 'Bitte wählen Sie mindestens eine Arbeit aus.');
+    }
 }
 if ($name === '') {
     reply(422, false, 'Bitte geben Sie Ihren Namen an.');
@@ -112,7 +117,7 @@ if (!$consent) {
 
 /* ---------- E-Mail ---------- */
 $lines = [
-    'Neue Anfrage über schweisstechnik-blitz.de',
+    'Neue Anfrage über schweisstechnik-blitz.de (' . $quelle . ')',
     str_repeat('=', 44),
     '',
     'Arbeit:        ' . implode(', ', $arbeiten),

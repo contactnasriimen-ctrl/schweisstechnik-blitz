@@ -1,3 +1,4 @@
 dist/
+static/
 data/*
 !data/.htaccess
