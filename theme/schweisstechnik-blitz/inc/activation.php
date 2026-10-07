@@ -47,6 +47,17 @@ function blitz_ensure_page( $key, $title, $slug, $parent = 0, $content = '' ) {
 	if ( $existing ) {
 		return (int) $existing[0];
 	}
+	// Seite unter derselben Adresse gibt es schon (z. B. von der bisherigen Website) → übernehmen statt doppelt anlegen
+	$path = $parent ? get_page_uri( $parent ) . '/' . $slug : $slug;
+	$old  = get_page_by_path( $path, OBJECT, 'page' );
+	if ( $old && 'trash' !== $old->post_status ) {
+		update_post_meta( $old->ID, '_blitz_key', $key );
+		if ( 'publish' !== $old->post_status ) {
+			wp_update_post( array( 'ID' => $old->ID, 'post_status' => 'publish' ) );
+		}
+		blitz_find_page( false );
+		return (int) $old->ID;
+	}
 	$id = wp_insert_post(
 		array(
 			'post_type'    => 'page',

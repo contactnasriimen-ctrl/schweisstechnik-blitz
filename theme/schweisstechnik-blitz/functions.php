@@ -8,7 +8,7 @@
 defined( 'ABSPATH' ) || exit;
 
 define( 'BLITZ_THEME', true );
-define( 'BLITZ_VERSION', '2.0.0' );
+define( 'BLITZ_VERSION', '2.0.1' );
 
 $blitz_inc = get_template_directory() . '/inc/';
 require $blitz_inc . 'helpers.php';

@@ -7,7 +7,7 @@
 
 define( 'BLITZ_THEME', true );
 define( 'BLITZ_STATIC', true );
-define( 'BLITZ_VERSION', '2.0.0' );
+define( 'BLITZ_VERSION', '2.0.1' );
 
 $root  = dirname( __DIR__ );
 $theme = $root . '/theme/schweisstechnik-blitz';
