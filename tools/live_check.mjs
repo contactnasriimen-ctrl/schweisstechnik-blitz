@@ -29,18 +29,18 @@ for (const [w, h, tag] of [[1440, 900, 'desktop'], [390, 844, 'mobile']]) {
     await page.click('input[value="Stahlkonstruktion"]');
     await page.click('[data-next]'); await sleep(900);
     await page.click('[data-next]'); await sleep(900);
-    await page.type('input[name="name"]', 'Test Vorschau');
-    await page.type('input[name="email"]', 'test@example.com');
-    await page.click('input[name="einwilligung"]');
+    await page.type('[data-wizard] input[name="name"]', 'Test Vorschau');
+    await page.type('[data-wizard] input[name="email"]', 'test@example.com');
+    await page.click('[data-wizard] input[name="einwilligung"]');
     await page.click('[data-submit]'); await sleep(1500);
-    const href = await page.$eval('.wizard__alt a[href^="https://wa.me/"]', (a) => a.href).catch(() => '');
+    const href = await page.$eval('[data-wizard] .wizard__alt a[href^="https://wa.me/"]', (a) => a.href).catch(() => '');
     ok('Formular: WhatsApp-Weg angeboten', href.includes('Stahlkonstruktion') && href.includes('Test%20Vorschau'));
-    ok('Formular: E-Mail-Weg angeboten', !!(await page.$('.wizard__alt a[href^="mailto:info@schweisstechnik-blitz.de"]')));
+    ok('Formular: E-Mail-Weg angeboten', !!(await page.$('[data-wizard] .wizard__alt a[href^="mailto:info@schweisstechnik-blitz.de"]')));
     await (await page.$('.wizard')).screenshot({ path: `${out}/live-form.png` });
   }
   await page.close();
 }
-for (const p of ['impressum.html', 'datenschutz.html', 'assets/img/og.jpg']) {
+for (const p of ['impressum/', 'datenschutz/', 'schweisser/muenchen/', 'leistungen/tanks-und-behaelter/', 'assets/img/og.jpg']) {
   const page = await browser.newPage();
   const r = await page.goto(url + p);
   ok(p + ' erreichbar', r.status() === 200);
